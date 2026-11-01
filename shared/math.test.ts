@@ -32,8 +32,12 @@ test('back-axis heading: phone upright, camera pointing north/east', () => {
   // Rotate 90° clockwise about Up: camera points East.
   const facingEast = [[0, 0, -1], [-1, 0, 0], [0, 1, 0]];
   near(backAxisHeading(facingEast), 90);
-  // identity quaternion = phone flat, screen up -> back points down, heading undefined-ish but finite
-  assert.ok(Number.isFinite(backAxisHeading(quatToMatrix(0, 0, 0, 1))));
+  // identity quaternion = phone flat, screen up, top edge pointing north -> facing north
+  near(backAxisHeading(quatToMatrix(0, 0, 0, 1)), 0);
+  // flat, rotated 90° clockwise (top edge east): quaternion about Up by -90°
+  near(backAxisHeading(quatToMatrix(0, 0, -Math.SQRT1_2, Math.SQRT1_2)), 90);
+  // tilted 45° between flat and upright, facing north: still north
+  near(backAxisHeading(quatToMatrix(Math.sin(Math.PI / 8), 0, 0, Math.cos(Math.PI / 8))), 0);
 });
 
 test('spatialize: huddled group (inside blindM) hears it centred, full volume, unmuffled', () => {

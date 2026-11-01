@@ -28,7 +28,10 @@ export function enu(from: LatLon, to: LatLon) {
  * Add magnetic declination to get true north.
  */
 export function backAxisHeading(R: number[][], declinationDeg = 0): number {
-  return (deg(Math.atan2(-R[0][2], -R[1][2])) + declinationDeg + 360) % 360;
+  // Back axis (camera) when upright + top axis when flat: the two horizontal projections point the
+  // same way the player faces, and each fades out exactly as the other takes over, so any tilt works.
+  const e = -R[0][2] + R[0][1], n = -R[1][2] + R[1][1];
+  return (deg(Math.atan2(e, n)) + declinationDeg + 360) % 360;
 }
 
 /** Rotation matrix from a unit quaternion (x,y,z,w), as Android's TYPE_ROTATION_VECTOR gives. */

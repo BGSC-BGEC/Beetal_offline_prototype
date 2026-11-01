@@ -40,33 +40,52 @@ export function Tutorial({ canSkip, onDone }: { canSkip: boolean; onDone: () => 
 }
 
 // ---------- 1. stance: hold upright, turn a full circle (proves the compass works) ----------
+const CARDINAL = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const cardinal = (h: number) => CARDINAL[Math.round(h / 45) % 8];
+
 function Stance({ onOk }: { onOk: () => void }) {
   const s = useStore();
   const last = useRef<number | null>(null);
   const [turned, setTurned] = useState(0);
   useEffect(() => {
-    if (last.current !== null) setTurned(t => Math.min(360, t + Math.abs(wrap180(s.heading - last.current!))));
+    // Delta computed here, not inside the state updater: the updater runs later, after last.current moved on.
+    const delta = last.current === null ? 0 : Math.abs(wrap180(s.heading - last.current));
     last.current = s.heading;
+    if (delta > 0) setTurned(t => Math.min(360, t + delta));
   }, [s.heading]);
   const done = turned >= 330;
   const stuck = useElapsed(20_000);
-  const size = 220, c = size / 2;
+  const size = 240, c = size / 2, r = c - 6;
+  const h = Math.round(s.heading) % 360;
   return (
     <View style={{ flex: 1 }}>
       <Title size={34}>Stance</Title>
-      <P>Hold your phone upright in front of your chest, screen facing you, camera pointing forward — like you're filming. The camera is your eyes and your blade.</P>
-      <View style={{ alignItems: 'center', marginVertical: 18 }}>
+      <P>Hold your phone upright in front of your chest, screen facing you, camera pointing forward, as if you're filming. The camera is your eyes and your blade.</P>
+      <View style={{ alignItems: 'center', marginVertical: 14 }}>
         <Svg width={size} height={size}>
-          <Circle cx={c} cy={c} r={c - 4} stroke={C.line} strokeWidth={2} fill={C.card} />
-          <Circle cx={c} cy={c} r={c - 4} stroke={C.gold} strokeWidth={6} fill="none"
-            strokeDasharray={`${(turned / 360) * 2 * Math.PI * (c - 4)} 9999`} rotation={-90} origin={`${c}, ${c}`} />
+          <Circle cx={c} cy={c} r={r} stroke={C.line} strokeWidth={2} fill={C.card} />
+          <Circle cx={c} cy={c} r={r} stroke={C.gold} strokeWidth={6} fill="none"
+            strokeDasharray={`${(turned / 360) * 2 * Math.PI * r} 9999`} rotation={-90} origin={`${c}, ${c}`} />
+          {/* dial turns so the world stays put: N always points at real north */}
           <G rotation={-s.heading} origin={`${c}, ${c}`}>
-            <SvgText x={c} y={30} fill={C.red} fontSize={18} fontWeight="bold" textAnchor="middle">N</SvgText>
+            {Array.from({ length: 24 }, (_, i) => (
+              <Line key={i} x1={c} y1={c - r + 8} x2={c} y2={c - r + (i % 6 === 0 ? 20 : 13)} stroke={i === 0 ? C.red : C.dim}
+                strokeWidth={i % 6 === 0 ? 2.5 : 1} rotation={i * 15} origin={`${c}, ${c}`} />
+            ))}
+            {['N', 'E', 'S', 'W'].map((l, i) => (
+              <SvgText key={l} x={c} y={c - r + 38} fill={l === 'N' ? C.red : C.text} fontSize={17} fontWeight="bold" textAnchor="middle"
+                rotation={i * 90} origin={`${c}, ${c}`}>{l}</SvgText>
+            ))}
           </G>
-          <Polygon points={`${c},${c - 40} ${c - 14},${c + 16} ${c},${c + 6} ${c + 14},${c + 16}`} fill={C.gold} />
+          {/* fixed marker at the top = the way you face */}
+          <Polygon points={`${c},${c - r - 2} ${c - 8},${c - r + 12} ${c + 8},${c - r + 12}`} fill={C.gold} />
+          <SvgText x={c} y={c + 4} fill={C.text} fontSize={44} fontWeight="900" textAnchor="middle">{h}°</SvgText>
+          <SvgText x={c} y={c + 30} fill={C.gold} fontSize={18} fontWeight="bold" textAnchor="middle">{cardinal(h)}</SvgText>
         </Svg>
-        <P dim>{done ? 'Compass works.' : `Now turn slowly on the spot, one full circle (${Math.round(turned)}°)`}</P>
-        {!s.compassOk && <P style={{ color: C.gold, textAlign: 'center' }}>Compass needs calibrating — wave the phone in a figure-8.</P>}
+        <P dim style={{ textAlign: 'center', marginTop: 6 }}>
+          {done ? 'Compass works.' : `The gold mark is where you face. 0° = north.\nTurn slowly on the spot, one full circle: ${Math.round(turned)}° / 360°`}
+        </P>
+        {!s.compassOk && <P style={{ color: C.gold, textAlign: 'center' }}>Compass needs calibrating: wave the phone in a figure-8.</P>}
       </View>
       <Btn title={done ? 'Next' : 'Turn a full circle first'} disabled={!done} onPress={onOk} />
       {!done && stuck && <Btn title="Compass not responding? Continue anyway" kind="ghost" onPress={onOk} />}
