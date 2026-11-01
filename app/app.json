@@ -2,7 +2,7 @@
   "expo": {
     "name": "Betaal",
     "slug": "betaal",
-    "version": "0.2.1",
+    "version": "0.2.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -16,7 +16,7 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.greedincarnate.betaal",
       "softwareKeyboardLayoutMode": "pan",
-      "versionCode": 3
+      "versionCode": 5
     },
     "plugins": [
       [

@@ -54,9 +54,9 @@ export function spatialize(
   const { d, bearing } = enu(listener, src);
   const theta = rad(wrap180(bearing - headingDeg));
 
-  // Direction confidence: 0 inside GPS noise, 1 once clearly outside it.
-  const d0 = Math.max(cfg.audio.minDirM, Math.hypot(listener.acc, src.acc));
-  const w = clamp((d - d0) / d0, 0, 1);
+  // Direction confidence: 0 inside the blind radius (or GPS noise, if worse), 1 from dirFullM out.
+  const d0 = Math.max(cfg.audio.blindM, Math.hypot(listener.acc, src.acc));
+  const w = clamp((d - d0) / Math.max(1, cfg.audio.dirFullM - d0), 0, 1);
 
   const pan = w * Math.sin(theta);
   const behind = w * Math.max(0, -Math.cos(theta));
@@ -65,6 +65,16 @@ export function spatialize(
   let gain = refM / (refM + (Math.max(d, refM) - refM));        // inverse, full within refM
   gain *= clamp((maxM - d) / (maxM - hearM), 0, 1);             // fade out past hearM
   return { gain, pan, cutoffHz };
+}
+
+/** Move a point a random distance (uniform over a disc of radius m). */
+export function blur(p: LatLon, m: number, rng: () => number): LatLon {
+  const r = m * Math.sqrt(rng()), a = 2 * Math.PI * rng();
+  return {
+    ...p,
+    lat: p.lat + (r * Math.cos(a)) / M_PER_DEG,
+    lon: p.lon + (r * Math.sin(a)) / (M_PER_DEG * Math.cos(rad(p.lat))),
+  };
 }
 
 /** Full-volume centred params for the player the event is about (new host / victim). */

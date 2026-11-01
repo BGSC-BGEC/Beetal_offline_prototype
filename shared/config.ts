@@ -33,9 +33,14 @@ export const DEFAULT_CFG = {
   swing: { peak: 12, dominance: 2, windowMs: 250 },
 
   audio: {
-    bell:   { refM: 6, hearM: 25, maxM: 35 },
-    scream: { refM: 6, hearM: 30, maxM: 40 },
-    minDirM: 6,            // below max(this, combined GPS acc) the sound is centred
+    // Huddling hides the Ghost: inside blindM a sound is centred, unmuffled and at full volume for
+    // everyone, so a group can't tell which of them it came from. Direction fades in from blindM to
+    // dirFullM. To find the source you must be away from it when it rings.
+    bell:   { refM: 12, hearM: 40, maxM: 55 },
+    scream: { refM: 12, hearM: 45, maxM: 60 },
+    blindM: 12,            // centred below max(this, combined GPS acc); keep = refM so volume gives nothing away
+    dirFullM: 30,          // full left/right/behind precision from here out
+    bellBlurM: 6,          // bell source moved up to this far at random: points at a cluster, not a person
     behindHz: 3000,        // low-pass cutoff when source is fully behind
   },
 };

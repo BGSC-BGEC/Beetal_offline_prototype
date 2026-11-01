@@ -9,8 +9,8 @@ export type Prefs = {
   haptics: boolean;
 };
 
-// ponytail: default points at the Fly.io deployment (server/fly.toml); LAN servers are set in Settings.
-export const DEFAULT_SERVER = 'wss://betaal-proto.fly.dev';
+// Render free web service (render.yaml); LAN servers are set in Settings.
+export const DEFAULT_SERVER = 'wss://betaal-proto.onrender.com';
 
 const KEY = 'betaal.prefs.v1';
 let prefs: Prefs = { name: '', serverUrl: DEFAULT_SERVER, token: null, tutorialDone: false, haptics: true };
@@ -19,6 +19,7 @@ export async function loadPrefs(): Promise<Prefs> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     if (raw) prefs = { ...prefs, ...JSON.parse(raw) };
+    if (prefs.serverUrl === 'wss://betaal-proto.fly.dev') prefs.serverUrl = DEFAULT_SERVER; // 0.2.0 default, never deployed
   } catch {}
   return prefs;
 }

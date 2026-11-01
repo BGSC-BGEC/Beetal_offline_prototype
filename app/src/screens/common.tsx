@@ -10,7 +10,7 @@ export function OnlineBadge({ online }: { online: boolean }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
       <Dot color={online ? C.ok : C.red} />
-      <Text style={{ color: C.dim, fontSize: 13 }}>{online ? 'Connected' : 'Connecting to server…'}</Text>
+      <Text style={{ color: C.dim, fontSize: 13 }}>{online ? 'Connected' : 'Connecting… (a sleeping server takes up to a minute to wake)'}</Text>
     </View>
   );
 }

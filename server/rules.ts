@@ -1,7 +1,7 @@
 // Authoritative game rules. Pure: no I/O, no clocks, no Math.random.
 // Every function takes `now` and `rng` and returns Effects for the server to send.
 import type { Cfg, Role } from '../shared/config.ts';
-import { bleThresholdDb, enu, type LatLon } from '../shared/math.ts';
+import { bleThresholdDb, blur, enu, type LatLon } from '../shared/math.ts';
 import type { Measurement, Snapshot } from '../shared/protocol.ts';
 export type { Measurement, Snapshot };
 
@@ -67,7 +67,8 @@ function possess(g: Game, id: string, now: number, rng: Rng, fx: Effect[]) {
   g.timerEndsAt = now + g.cfg.possessionMs;
   g.storyId = Math.floor(rng() * g.cfg.stories);
   fx.push({ type: 'possessed', id, endsAt: g.timerEndsAt, storyId: g.storyId });
-  fx.push({ type: 'bell', hostId: id, at: g.players[id].pos });
+  const pos = g.players[id].pos;
+  fx.push({ type: 'bell', hostId: id, at: pos && blur(pos, g.cfg.audio.bellBlurM, rng) });
 }
 
 function end(g: Game, result: Result, fx: Effect[]) {

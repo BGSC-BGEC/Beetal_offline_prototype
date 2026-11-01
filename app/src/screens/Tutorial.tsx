@@ -155,7 +155,7 @@ function Listen({ onOk }: { onOk: () => void }) {
 // ---------- 4. rules ----------
 const CARDS: { title: string; body: string }[] = [
   { title: 'One of you carries Betaal', body: 'The Ghost possesses one player at a time. Nobody can see who — not on the map, not on the screen. Every phone looks the same.' },
-  { title: 'Listen for it', body: 'A bell rings where the Ghost enters someone. A scream rings where someone dies. Both come from that direction in your earphones — turn to find them.' },
+  { title: 'Listen for it', body: 'A bell rings where the Ghost enters someone. A scream rings where someone dies. From afar, both come from their direction in your earphones — turn to find them. Huddled close, every sound is everywhere: to know who carries Betaal, you must be away from the crowd when it rings.' },
   { title: 'Kill, or be killed', body: 'If you hear breathing, Betaal is in you. Kill anyone before your time runs out and it moves on. Do nothing, and it kills you instead.' },
   { title: 'Every death moves the Ghost', body: 'After any death the Ghost jumps to a random living player. Kill the one carrying it and the Ghost is destroyed — every survivor wins.' },
   { title: 'Or the Ghost wins', body: 'If it comes down to two players, whoever carries Betaal at that moment takes everything. Choose your trust carefully.' },

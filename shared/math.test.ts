@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_CFG } from './config.ts';
 import {
   backAxisHeading, bleDistance, bleOffsets, bleThresholdDb, enu, makeSwingDetector,
-  quatToMatrix, selectTarget, spatialize, wrap180,
+  quatToMatrix, selectTarget, spatialize, wrap180, blur,
 } from './math.ts';
 
 const cfg = DEFAULT_CFG;
@@ -36,23 +36,31 @@ test('back-axis heading: phone upright, camera pointing north/east', () => {
   assert.ok(Number.isFinite(backAxisHeading(quatToMatrix(0, 0, 0, 1))));
 });
 
-test('spatialize: inside GPS noise = centred full volume', () => {
-  const s = spatialize(L, 0, east(4), 'bell', cfg);
-  assert.equal(s.pan, 0); assert.equal(s.gain, 1); near(s.cutoffHz, 20_000);
+test('spatialize: huddled group (inside blindM) hears it centred, full volume, unmuffled', () => {
+  for (const src of [east(4), north(-11), east(-11)]) {
+    const s = spatialize(L, 0, src, 'bell', cfg);
+    near(s.pan, 0); near(s.gain, 1); near(s.cutoffHz, 20_000);
+  }
 });
 
-test('spatialize: source east, facing north = hard right; facing south = left', () => {
-  near(spatialize(L, 0, east(20), 'bell', cfg).pan, 1, 1e-3);
-  near(spatialize(L, 180, east(20), 'bell', cfg).pan, -1, 1e-3);
+test('spatialize: direction fades in between blindM and dirFullM', () => {
+  near(spatialize(L, 0, east(21), 'bell', cfg).pan, 0.5, 1e-3);   // halfway
+  near(spatialize(L, 0, east(30), 'bell', cfg).pan, 1, 1e-3);     // facing north, source east = right
+  near(spatialize(L, 180, east(30), 'bell', cfg).pan, -1, 1e-3);  // facing south = left
+  near(spatialize(L, 0, north(-30), 'bell', cfg).cutoffHz, cfg.audio.behindHz, 1);
 });
 
-test('spatialize: source behind is muffled, gain curve, cutoff past maxM', () => {
-  const s = spatialize(L, 0, north(-20), 'bell', cfg);
-  near(s.cutoffHz, cfg.audio.behindHz, 1);
-  near(spatialize(L, 0, north(12), 'bell', cfg).gain, 0.5, 1e-3);
-  near(spatialize(L, 0, north(30), 'bell', cfg).gain, 0.2 * 0.5, 1e-3);
-  assert.equal(spatialize(L, 0, north(36), 'bell', cfg).gain, 0);
-  assert.ok(spatialize(L, 0, north(36), 'scream', cfg).gain > 0); // scream carries further
+test('spatialize: gain curve and hearing range', () => {
+  near(spatialize(L, 0, north(24), 'bell', cfg).gain, 0.5, 1e-3);
+  near(spatialize(L, 0, north(50), 'bell', cfg).gain, (12 / 50) * (5 / 15), 1e-3);
+  assert.equal(spatialize(L, 0, north(56), 'bell', cfg).gain, 0);
+  assert.ok(spatialize(L, 0, north(56), 'scream', cfg).gain > 0); // scream carries further
+});
+
+test('blur stays within radius', () => {
+  let x = 0.123;
+  const rng = () => (x = (x * 9301 + 49297) % 233280 / 233280);
+  for (let i = 0; i < 200; i++) assert.ok(enu(L, blur(L, 6, rng)).d <= 6 + 1e-6);
 });
 
 test('BLE model round-trips and thresholds match radius', () => {
