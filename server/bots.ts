@@ -26,6 +26,7 @@ for (let i = 0; i < N; i++) {
     if (m.t === 'error') console.log(`${b.name}: ${m.msg}`);
     if (m.t === 'possessed') { b.possessed = true; console.log(`${b.name} is possessed`); }
     if (m.t === 'released') b.possessed = false;
+    if ((m.t === 'welcome' || m.t === 'map') && m.arena) { console.error('Bots simulate outdoor GPS only. Use real phones for an indoor room.'); b.ws.close(); return; }
     if (m.t === 'state') {
       if (m.phase === 'LOBBY' && !m.players.find((p: any) => p.id === b.id)?.ready) b.ws.send(JSON.stringify({ t: 'ready', on: true }));
       if (m.phase === 'LOBBY') { b.alive = true; b.possessed = false; }
@@ -63,7 +64,7 @@ setInterval(() => {
   // pretend they met: close in GPS too, so the server's GPS sanity check passes
   target.angle = attacker.angle; target.r = attacker.r;
   setTimeout(() => {
-    attacker.ws.send(JSON.stringify({ t: 'kill', targetId: target.id, m: { method: 'ble', rssiC: -50 } }));
+    attacker.ws.send(JSON.stringify({ t: 'kill', targetId: target.id, m: { method: 'ble', near: { [target.id as string]: -50 } } }));
     console.log(`${attacker.name} stabs ${target.name}`);
   }, 1500);
 }, 15_000);

@@ -2,10 +2,10 @@
 // BLE RSSI + UWB ranging -> neighbour reports, calibration, stab -> kill claim.
 import * as Location from 'expo-location';
 import Betaal from '../modules/betaal';
-import { backAxisHeading, makeSwingDetector, median, quatToMatrix, selectTarget, type PeerReading } from '../../shared/math.ts';
-import { DEFAULT_CFG } from '../../shared/config.ts';
+import { backAxisHeading, makeGravityFilter, makeSwingDetector, median, quatToMatrix, selectTarget, type PeerReading } from '../../shared/math.ts';
 import { amAlive, get, myPlayer, onMessage, send, set, toast } from './store';
 import { buzz, playPrivate } from './audio';
+import { initIndoorTracking } from './indoor';
 
 const rssi = new Map<number, { v: number; t: number }[]>();          // by player idx
 const uwb = new Map<string, { d: number; az?: number; t: number }>(); // by player id
@@ -17,8 +17,20 @@ let bleRoom: { room: number; idx: number } | null = null;
 // ---------- stab listeners (game + tutorial) ----------
 const stabSubs = new Set<() => void>();
 export const onStab = (f: () => void) => (stabSubs.add(f), () => { stabSubs.delete(f); });
+export function buttonStrike() {
+  if (get().sensors?.acceleration === 'none') stabSubs.forEach(f => f());
+}
 /** Live forward thrust (m/s², along the camera axis) for the tutorial meter. */
 export let forwardAccel = 0;
+
+const MISS: Record<string, string> = {
+  crowded: 'Too crowded — several players in reach and your aim could not single one out.',
+  angle: 'Nobody in front of you.',
+  floor: 'Target is on another floor.',
+  wall: 'A wall is in the way.',
+  position: 'Indoor location missing or stale — set your spot on the map.',
+  direction: 'Target direction unavailable.',
+};
 
 let sensorsOn = false;
 /** Start GPS, heading and stab detection. Call once permissions are granted. */
@@ -26,17 +38,20 @@ export async function initSensors() {
   if (sensorsOn) return;
   sensorsOn = true;
   Betaal.keepAwake(true);
-  Betaal.startSensors();
 
   Betaal.addListener('onRotation', q => {
-    set({ heading: backAxisHeading(quatToMatrix(q.x, q.y, q.z, q.w), declination), compassOk: q.acc >= 2 });
+    set({ heading: (backAxisHeading(quatToMatrix(q.x, q.y, q.z, q.w), declination) - (get().arena?.northDeg ?? 0) + 360) % 360, compassOk: q.acc >= 2 });
   });
 
-  const swing = makeSwingDetector(DEFAULT_CFG);
+  const swing = makeSwingDetector(get().cfg);
+  const removeGravity = makeGravityFilter();
   Betaal.addListener('onAccel', a => {
-    forwardAccel = -a.z;
-    if (swing(a)) stabSubs.forEach(f => f());
+    const linear = a.includesGravity ? removeGravity(a) : a;
+    forwardAccel = linear ? -linear.z : 0;
+    if (linear && swing(linear, get().cfg.swing)) stabSubs.forEach(f => f());
   });
+  const sensors = Betaal.startSensors();
+  set({ sensors, ...(!sensors.heading ? { heading: 0, compassOk: false } : {}) });
 
   Betaal.addListener('onRssi', e => {
     const xs = rssi.get(e.idx) ?? [];
@@ -52,19 +67,21 @@ export async function initSensors() {
     if (m.t === 'left') stopBle();
     if (m.t === 'killResult') {
       if (m.ok) { playPrivate('hit'); buzz([0, 200]); }
-      else { playPrivate('miss'); if (m.reason !== 'range') toast(m.reason === 'crowded' ? 'Too close to call' : `Missed (${m.reason})`); }
+      else { playPrivate('miss'); if (m.reason && m.reason !== 'range') toast(MISS[m.reason] ?? `Missed (${m.reason})`, 4000); }
     }
     if (m.t === 'uwbOob') onUwbOob(m.from, JSON.parse(m.data));
   });
 
   setInterval(reportNeighbours, 500);
+  initIndoorTracking();
 
   try {
     await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 0 },
       loc => {
         const pos = { lat: loc.coords.latitude, lon: loc.coords.longitude, acc: loc.coords.accuracy ?? 50 };
-        if (!get().pos) declination = Betaal.declination(pos.lat, pos.lon);
+        declination = Betaal.declination(pos.lat, pos.lon);
+        if (get().arena) return;
         set({ pos });
         if (get().me) send({ t: 'pos', ...pos });
       },
@@ -102,17 +119,14 @@ function readings(now: number): PeerReading[] {
 
 function onGameStab() {
   const st = get();
-  if (st.phase !== 'HUNT' || !amAlive()) return;
+  if (st.phase !== 'HUNT' || !amAlive() || !st.serverCompatible) return;
   const now = Date.now();
   if (now < cooldownUntil) { buzz([0, 40, 60, 40]); playPrivate('deny'); return; }
   cooldownUntil = now + st.cfg.cooldownMs;
-  const t = selectTarget(readings(now), st.possessed ? 'ghost' : 'vikram', myPlayer()?.bleOffset ?? 0, Betaal.hasUwb(), now, st.cfg);
-  if ('miss' in t) {
-    playPrivate('miss');
-    if (t.miss === 'crowded') toast('Too close to call — get closer to one person');
-    return;
-  }
-  send({ t: 'kill', targetId: t.id, m: t.method === 'uwb' ? { method: 'uwb', d: t.d, az: t.az } : { method: 'ble', rssiC: t.rssiC! } });
+  const heading = st.sensors?.heading && st.compassOk ? st.heading : undefined;
+  const t = selectTarget(readings(now), st.possessed ? 'ghost' : 'vikram', myPlayer()?.bleOffset ?? 0, Betaal.hasUwb(), now, st.cfg, heading);
+  if ('miss' in t) { playPrivate('miss'); return; }
+  send({ t: 'kill', ...t });
 }
 
 // Neighbour report 2 Hz (top 5 nearest) + UWB peer choice every 5 s

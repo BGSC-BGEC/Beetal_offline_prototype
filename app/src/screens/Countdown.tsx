@@ -13,7 +13,7 @@ export function Countdown({ now }: { now: number }) {
       <Text style={{ color: C.gold, fontSize: 160, fontWeight: '900', lineHeight: 180 }}>{left || ''}</Text>
       <Title size={26} style={{ alignSelf: 'stretch', textAlign: 'center' }}>{left > 0 ? 'बेताल जाग रहा है' : 'बेताल जाग गया'}</Title>
       <P dim style={{ marginTop: 18, textAlign: 'center' }}>
-        Earphones in. Phone upright, camera forward.{'\n'}Hold the screen during the hunt to check yourself.
+        Earphones in. Phone upright, camera forward.{'\n'}{s.sensors?.acceleration === 'none' ? 'Tap Strike when within range.' : 'Thrust forward to strike.'}{'\n'}Hold the screen during the hunt to check yourself.
       </P>
       <View style={{ height: 40 }} />
     </Screen>

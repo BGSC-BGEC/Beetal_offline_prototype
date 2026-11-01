@@ -1,7 +1,8 @@
 // Authoritative game rules. Pure: no I/O, no clocks, no Math.random.
 // Every function takes `now` and `rng` and returns Effects for the server to send.
 import type { Cfg, Role } from '../shared/config.ts';
-import { bleThresholdDb, blur, enu, type LatLon } from '../shared/math.ts';
+import { bleThresholdDb, blur, coneCheck, enu, isIndoor, type Position } from '../shared/math.ts';
+import { wallBetween, type IndoorMap } from '../shared/indoor.ts';
 import type { Measurement, Snapshot } from '../shared/protocol.ts';
 export type { Measurement, Snapshot };
 
@@ -12,7 +13,8 @@ export type Player = {
   id: string; name: string; idx: number;
   alive: boolean; uwb: boolean; bleOffset: number;
   immuneUntil: number; cooldownUntil: number;
-  pos?: LatLon;
+  pos?: Position;
+  posAt?: number;
 };
 
 export type Result =
@@ -25,20 +27,21 @@ export type Game = {
   players: Record<string, Player>;
   hostId: string | null; timerEndsAt: number; storyId: number;
   result: Result | null;
+  arena: IndoorMap | null;
 };
 
 export type Effect =
   | { type: 'possessed'; id: string; endsAt: number; storyId: number }
   | { type: 'released'; id: string }
-  | { type: 'bell'; hostId: string; at?: LatLon }
-  | { type: 'scream'; victimId: string; cause: Cause; by?: string; at?: LatLon }
+  | { type: 'bell'; hostId: string; at?: Position }
+  | { type: 'scream'; victimId: string; cause: Cause; by?: string; at?: Position }
   | { type: 'ping'; snapshot: Snapshot; exitedId: string | null }
   | { type: 'end'; result: Result };
 
 export type Rng = () => number; // [0,1)
 
 export function newGame(cfg: Cfg): Game {
-  return { phase: 'LOBBY', cfg, players: {}, hostId: null, timerEndsAt: 0, storyId: 0, result: null };
+  return { phase: 'LOBBY', cfg, players: {}, hostId: null, timerEndsAt: 0, storyId: 0, result: null, arena: null };
 }
 
 export function addPlayer(g: Game, id: string, name: string, uwb: boolean): Player {
@@ -59,7 +62,17 @@ export function start(g: Game, now: number, rng: Rng): Effect[] {
   g.phase = 'HUNT';
   const fx: Effect[] = [];
   possess(g, pick(alive(g), rng).id, now, rng, fx);
+  fx.push(mapPing(g, now, null));
   return fx;
+}
+
+function mapPing(g: Game, now: number, exitedId: string | null): Effect {
+  return {
+    type: 'ping', exitedId,
+    snapshot: alive(g).map(p => ({
+      id: p.id, name: p.name, pos: p.pos, immune: p.immuneUntil > now, exited: p.id === exitedId,
+    })),
+  };
 }
 
 function possess(g: Game, id: string, now: number, rng: Rng, fx: Effect[]) {
@@ -79,25 +92,20 @@ function end(g: Game, result: Result, fx: Effect[]) {
 
 /**
  * Move the Ghost. `immunity` grants the outgoing host 10 s (ghost kill / task set).
- * Outgoing host stays eligible when not immune (player-initiated kill) — GDD 4.4.
+ * Every transfer must choose a different host, even after a player-initiated kill.
  */
 function transfer(g: Game, now: number, rng: Rng, immunity: boolean, fx: Effect[]) {
   const prev = g.hostId;
   if (prev && immunity && g.players[prev].alive) g.players[prev].immuneUntil = now + g.cfg.immunityMs;
   if (prev && g.players[prev].alive) fx.push({ type: 'released', id: prev });
 
-  const candidates = alive(g).filter(p => p.immuneUntil <= now);
+  const candidates = alive(g).filter(p => p.id !== prev && p.immuneUntil <= now);
   if (!candidates.length) {
     g.hostId = null;
     return end(g, { kind: 'divya', winners: alive(g).map(p => p.id) }, fx);
   }
   possess(g, pick(candidates, rng).id, now, rng, fx);
-  fx.push({
-    type: 'ping', exitedId: prev,
-    snapshot: alive(g).map(p => ({
-      id: p.id, name: p.name, pos: p.pos, immune: p.immuneUntil > now, exited: p.id === prev,
-    })),
-  });
+  fx.push(mapPing(g, now, prev));
 }
 
 /** Any death. End checks run BEFORE the transfer (GDD 3.2 worked example). */
@@ -146,24 +154,58 @@ export type NbrTable = Record<string, Record<string, NbrReading>>; // [reporter]
 
 const role = (g: Game, id: string): Role => (g.hostId === id ? 'ghost' : 'vikram');
 
-/** Null = valid. Otherwise reason string. Checks measurement, reverse reading, GPS sanity. */
+/**
+ * BLE carries no bearing. Every peer the attacker heard inside range is a candidate; positions + heading
+ * drop the ones confidently outside the cone. Exactly one must remain, else the swing is too crowded.
+ */
+function bleTarget(g: Game, a: Player, m: Extract<Measurement, { method: 'ble' }>, R: number): string | { reason: string } {
+  const th = bleThresholdDb(R, g.cfg);
+  const inRange = Object.entries(m.near ?? {})
+    .filter(([id, r]) => id !== a.id && g.players[id]?.alive && Number.isFinite(r) && r >= th).map(([id]) => id);
+  if (!inRange.length) return { reason: 'range' };
+  const heading = m.heading;
+  const cone = (id: string) => {
+    const t = g.players[id].pos;
+    return a.pos && t && heading !== undefined && Number.isFinite(heading) ? coneCheck(a.pos, t, heading, g.cfg.ble.coneDeg) : 'unknown';
+  };
+  const viable = inRange.filter(id => cone(id) !== 'out');
+  if (!viable.length) return { reason: 'angle' };
+  return viable.length === 1 ? viable[0] : { reason: 'crowded' };
+}
+
+/** Null = valid. Otherwise reason string. BLE claims get their target resolved here (c.targetId may change). */
 export function validateClaim(g: Game, c: Claim, nbrs: NbrTable, now: number): string | null {
-  const a = g.players[c.attackerId], t = g.players[c.targetId];
-  if (!a?.alive || !t?.alive) return 'dead';
-  if (a.id === t.id) return 'self';
+  const a = g.players[c.attackerId];
+  if (!a?.alive) return 'dead';
   if (now < a.cooldownUntil) return 'cooldown';
   const cfg = g.cfg, R = c.m.method === 'uwb' ? cfg.uwb.killR[role(g, a.id)] : cfg.ble.killR[role(g, a.id)];
+  if (c.m.method === 'ble') {
+    const picked = bleTarget(g, a, c.m, R);
+    if (typeof picked !== 'string') return picked.reason;
+    c.targetId = picked;
+  }
+  const t = g.players[c.targetId];
+  if (!t?.alive) return 'dead';
+  if (a.id === t.id) return 'self';
+
+  if (g.arena) {
+    if (!a.pos || !t.pos || !isIndoor(a.pos) || !isIndoor(t.pos) || a.pos.mapId !== g.arena.id || t.pos.mapId !== g.arena.id) return 'position';
+    if (now - (a.posAt ?? 0) > cfg.indoor.posFreshMs || now - (t.posAt ?? 0) > cfg.indoor.posFreshMs) return 'position';
+    if (a.pos.floorId !== t.pos.floorId) return 'floor';
+    const floorId = a.pos.floorId, floor = g.arena.floors.find(f => f.id === floorId);
+    if (!floor) return 'position';
+    if (a.pos.acc + t.pos.acc <= cfg.indoor.wallCheckAccM && wallBetween(a.pos, t.pos, floor.walls)) return 'wall';
+  }
 
   const rev = nbrs[t.id]?.[a.id];
   const revFresh = rev && now - rev.t <= cfg.ble.staleMs;
   if (c.m.method === 'uwb') {
-    if (c.m.d > R) return 'range';
-    if (c.m.az !== undefined && Math.abs(c.m.az) > cfg.uwb.coneDeg) return 'angle';
+    if (!Number.isFinite(c.m.d) || c.m.d < 0 || c.m.d > R) return 'range';
+    if (!Number.isFinite(c.m.az)) return 'direction';
+    if (Math.abs(c.m.az) > cfg.uwb.coneDeg) return 'angle';
     if (revFresh && rev.uwbD !== undefined && rev.uwbD > R + cfg.uwb.reverseSlackM) return 'reverse';
   } else {
-    const th = bleThresholdDb(R, cfg);
-    if (c.m.rssiC < th) return 'range';
-    if (revFresh && rev.rssiC !== undefined && rev.rssiC < th - cfg.ble.reverseSlackDb) return 'reverse';
+    if (revFresh && rev.rssiC !== undefined && rev.rssiC < bleThresholdDb(R, cfg) - cfg.ble.reverseSlackDb) return 'reverse';
   }
   if (a.pos && t.pos && enu(a.pos, t.pos).d > R + a.pos.acc + t.pos.acc + cfg.gpsSanitySlackM) return 'gps';
   return null;
@@ -183,8 +225,7 @@ export function resolveWindow(g: Game, claims: Claim[], nbrs: NbrTable, now: num
 
   for (const c of ordered) {
     if (g.phase !== 'HUNT') { rejected.push({ claim: c, reason: 'ended' }); continue; }
-    if (hostKilled && c.targetId === hostAtStart) { rejected.push({ claim: c, reason: 'ghost-priority' }); continue; }
-    const reason = validateClaim(g, c, nbrs, now);
+    const reason = validateClaim(g, c, nbrs, now) ?? (hostKilled && c.targetId === hostAtStart ? 'ghost-priority' : null);
     if (reason) { rejected.push({ claim: c, reason }); continue; }
     g.players[c.attackerId].cooldownUntil = now + g.cfg.cooldownMs;
     const cause: Cause = c.attackerId === g.hostId ? 'ghost' : 'player';

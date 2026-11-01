@@ -83,6 +83,14 @@ export default function App() {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar style="light" />
+      {s.me && !s.serverCompatible && <View style={{ paddingTop: 30, paddingHorizontal: 16, paddingBottom: 8, backgroundColor: '#3a0f0a' }}><P>Server update required. Connect to the updated game server to use this build.</P></View>}
+      {s.sensors && (s.sensors.acceleration !== 'linear' || !s.sensors.heading) && (
+        <View style={{ paddingTop: 30, paddingHorizontal: 16, paddingBottom: 8, backgroundColor: '#3a2a08' }}>
+          {s.sensors.acceleration === 'accelerometer' && <P dim>Linear acceleration sensor unavailable. Using the accelerometer for thrusts. Hold still for a second first; keep the phone upright.</P>}
+          {s.sensors.acceleration === 'none' && <P dim>Motion sensors unavailable. Get within range and tap Strike instead.</P>}
+          {!s.sensors.heading && <P dim>Heading sensor unavailable. Map stays north-up; game sounds have no directional cues.</P>}
+        </View>
+      )}
       {screen}
       {s.toast && now < s.toast.until && (
         <View style={{ position: 'absolute', bottom: 36, left: 20, right: 20, alignItems: 'center' }} pointerEvents="none">

@@ -26,9 +26,15 @@ export const DEFAULT_CFG = {
     windowMs: 1000,        // median window
     staleMs: 1500,         // no packet for this long = peer unknown
     reverseSlackDb: 6,     // victim's reading of attacker may be this much weaker than threshold
+    coneDeg: 45,           // BLE has no bearing: in a crowd, shared positions + heading must rule out all but one target
   },
 
   gpsSanitySlackM: 5,      // reject kill if GPS distance > R + accA + accB + this
+
+  indoor: {
+    posFreshMs: 3_000,     // indoor hits need a position report this recent from both players
+    wallCheckAccM: 3,      // walls block hits only when accA + accB is at most this; coarser fixes can't place a wall between
+  },
 
   swing: { peak: 12, dominance: 2, windowMs: 250 },
 

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "server": "node server/server.ts",
-    "test": "node --test shared/math.test.ts server/rules.test.ts server/server.test.ts",
+    "test": "node --test shared/math.test.ts shared/indoor.test.ts server/rules.test.ts server/server.test.ts",
     "bots": "node server/bots.ts"
   },
   "engines": {

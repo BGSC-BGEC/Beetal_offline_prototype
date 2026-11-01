@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DEFAULT_CFG, type Cfg } from '../shared/config.ts';
 import { bleOffsets } from '../shared/math.ts';
-import type { ClientMsg, HistoryEntry, HostCmd, PublicPlayer, ServerMsg } from '../shared/protocol.ts';
+import { validIndoorMap, validIndoorPosition } from '../shared/indoor.ts';
+import type { ClientMsg, HistoryEntry, HostCmd, MapCmd, PublicPlayer, ServerMsg } from '../shared/protocol.ts';
 import {
   addPlayer, completeTaskSet, kill, newGame, resolveWindow, start, tick,
   type Claim, type Effect, type Game, type NbrTable,
@@ -66,6 +67,7 @@ export function startServer(port: number, rng: () => number = Math.random, count
     const players: PublicPlayer[] = Object.values(r.g.players).map(p => ({
       id: p.id, name: p.name, idx: p.idx, alive: p.alive, immune: p.immuneUntil > now, uwb: p.uwb, bleOffset: p.bleOffset,
       ready: r.ready.has(p.id), connected: r.sockets.has(p.id), calibrated: (r.calib[p.id]?.length ?? 0) > 0,
+      positionReady: !r.g.arena || (!!p.pos && 'mapId' in p.pos && p.pos.mapId === r.g.arena.id && now - (p.posAt ?? 0) <= 5000),
     }));
     return {
       t: 'state', code: r.code, phase: r.g.phase, players, ownerId: r.ownerId,
@@ -121,14 +123,22 @@ export function startServer(port: number, rng: () => number = Math.random, count
   }
 
   // ---------- host commands (owner phone or GM page) ----------
-  function hostCmd(r: Room, m: HostCmd, fromGm: boolean): string | null {
+  function hostCmd(r: Room, m: HostCmd | MapCmd, fromGm: boolean): string | null {
     const g = r.g;
     const now = Date.now();
     switch (m.cmd) {
+      case 'setMap':
+        if (g.phase !== 'LOBBY') return 'Map can only change in the lobby';
+        if (m.map !== null && !validIndoorMap(m.map)) return 'Invalid indoor map';
+        g.arena = m.map;
+        for (const p of Object.values(g.players)) { delete p.pos; delete p.posAt; }
+        r.sockets.forEach(ws => send(ws, { t: 'map', arena: g.arena }));
+        break;
       case 'start': {
         if (g.phase !== 'LOBBY' && g.phase !== 'CALIBRATION') return 'Game already running';
         const ps = Object.values(g.players);
         if (ps.length < 3) return 'Need at least 3 players';
+        if (g.arena && ps.some(p => !p.pos || !('mapId' in p.pos) || p.pos.mapId !== g.arena!.id || now - (p.posAt ?? 0) > 5000)) return 'Everyone needs a fresh indoor marker or Wi-Fi fix before starting';
         if (!fromGm && ps.some(p => !r.ready.has(p.id))) return 'Everyone must be ready';
         g.phase = 'COUNTDOWN';
         r.countdownEndsAt = now + countdownMs;
@@ -156,6 +166,7 @@ export function startServer(port: number, rng: () => number = Math.random, count
         if (g.phase !== 'RESULTS' && !fromGm) return 'Game still running';
         const old = g.players;
         r.g = newGame(r.cfg);
+        r.g.arena = g.arena;
         for (const p of Object.values(old)) {
           if (!r.sockets.has(p.id)) { tokenRoom.delete(p.id); continue; } // drop players who left
           Object.assign(addPlayer(r.g, p.id, p.name, p.uwb), { bleOffset: p.bleOffset, pos: p.pos, idx: p.idx });
@@ -169,10 +180,14 @@ export function startServer(port: number, rng: () => number = Math.random, count
         dispatch(r, completeTaskSet(g, now, rng));
         break;
       case 'setRef': r.ownerId = m.id; break;
-      case 'cfg':
+      case 'cfg': {
+        if (!m.patch || typeof m.patch !== 'object' || Array.isArray(m.patch) || ('swing' in m.patch && (!m.patch.swing || typeof m.patch.swing !== 'object' || Array.isArray(m.patch.swing)))) return 'Invalid configuration';
+        const swing = { ...r.cfg.swing, ...m.patch.swing };
+        if (![swing.peak, swing.dominance, swing.windowMs].every(Number.isFinite) || swing.peak <= 3 || swing.peak > 100 || swing.dominance < 1 || swing.dominance > 10 || swing.windowMs < 16 || swing.windowMs > 2000) return 'Invalid strike settings';
         for (const [k, v] of Object.entries(m.patch)) (r.cfg as any)[k] = typeof v === 'object' ? { ...(r.cfg as any)[k], ...v } : v;
         r.sockets.forEach(ws => send(ws, { t: 'cfg', cfg: r.cfg }));
         break;
+      }
     }
     broadcast(r);
     return null;
@@ -195,13 +210,26 @@ export function startServer(port: number, rng: () => number = Math.random, count
         if (err) send(ws, { t: 'error', msg: err });
         break;
       }
-      case 'pos': p.pos = { lat: m.lat, lon: m.lon, acc: m.acc }; break;
+      case 'pos': {
+        if ('mapId' in m) {
+          if (!r.g.arena || !validIndoorPosition(m, r.g.arena)) break;
+          const { mapId, floorId, x, y, z, acc, source } = m;
+          p.pos = { mapId, floorId, x, y, z, acc, source };
+        } else {
+          if (r.g.arena || ![m.lat, m.lon, m.acc].every(Number.isFinite) || Math.abs(m.lat) > 90 || Math.abs(m.lon) > 180 || m.acc < 0) break;
+          p.pos = { lat: m.lat, lon: m.lon, acc: m.acc };
+        }
+        p.posAt = now;
+        break;
+      }
       case 'nbr': {
         const row: NbrTable[string] = (r.nbrs[id] = {});
         for (const [peer, x] of Object.entries(m.peers)) row[peer] = { ...x, t: now };
         break;
       }
       case 'kill':
+        if (!m.m || typeof m.m !== 'object' || (m.m.method !== 'uwb' && m.m.method !== 'ble') || typeof m.targetId !== 'string') break;
+        if (m.m.method === 'ble' && (!m.m.near || typeof m.m.near !== 'object')) break;
         r.claims.push({ attackerId: id, targetId: m.targetId, m: m.m, recvAt: now });
         r.windowTimer ??= setTimeout(() => flushWindow(r), r.cfg.killWindowMs);
         break;
@@ -257,7 +285,7 @@ export function startServer(port: number, rng: () => number = Math.random, count
     tokenRoom.set(id, r.code);
     if (!r.ownerId || !r.g.players[r.ownerId]) r.ownerId = id;
     const p = r.g.players[id];
-    send(ws, { t: 'welcome', id, idx: p.idx, token: id, code: r.code, cfg: r.cfg, room: r.bleRoom });
+    send(ws, { t: 'welcome', protocolVersion: 2, id, idx: p.idx, token: id, code: r.code, cfg: r.cfg, room: r.bleRoom, arena: r.g.arena });
     if (r.g.hostId === id && r.g.phase === 'HUNT') send(ws, { t: 'possessed', endsAt: r.g.timerEndsAt, storyId: r.g.storyId });
     if (r.g.result) send(ws, { t: 'end', result: r.g.result, history: r.history });
     broadcast(r); roomList();

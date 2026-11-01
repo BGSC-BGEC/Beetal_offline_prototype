@@ -14,6 +14,7 @@ import androidx.core.uwb.*
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.kotlin.Promise
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.catch
 import java.security.SecureRandom
@@ -29,6 +30,8 @@ class BetaalModule : Module() {
   // ---- sensors ----
   private var sensorListener: SensorEventListener? = null
   private var lastRot = 0L
+  private var sensorStatus: Map<String, Any> = mapOf("acceleration" to "none", "heading" to false)
+  private val indoor by lazy { Indoor(ctx) { event, data -> sendEvent(event, data) } }
 
   // ---- BLE ----
   private var scanCb: ScanCallback? = null
@@ -44,12 +47,18 @@ class BetaalModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("Betaal")
-    Events("onRotation", "onAccel", "onRssi", "onUwb", "onUwbEnd", "onSoundEnd")
+    Events("onRotation", "onAccel", "onRssi", "onUwb", "onUwbEnd", "onSoundEnd", "onPressure", "onStep")
 
     OnDestroy { stopAll() }
 
     // ---------- device ----------
     Function("hasUwb") { ctx.packageManager.hasSystemFeature("android.hardware.uwb") }
+    Function("indoorCapabilities") { indoor.capabilities() }
+    Function("startIndoorSensors") { indoor.start() }
+    Function("stopIndoorSensors") { indoor.stop() }
+    Function("requestWifiScan") { indoor.scan() }
+    Function("wifiReadings") { indoor.readings() }
+    AsyncFunction("rangeWifi") { ids: List<String>, promise: Promise -> indoor.range(ids, promise) }
 
     Function("declination") { lat: Double, lon: Double ->
       GeomagneticField(lat.toFloat(), lon.toFloat(), 0f, System.currentTimeMillis()).declination.toDouble()
@@ -72,28 +81,38 @@ class BetaalModule : Module() {
 
     // ---------- sensors: rotation vector (30 Hz to JS) + linear acceleration (~60 Hz) ----------
     Function("startSensors") {
-      if (sensorListener != null) return@Function Unit
+      if (sensorListener != null) return@Function sensorStatus
       val sm = ctx.getSystemService(SensorManager::class.java)
       val q = FloatArray(4)
       val l = object : SensorEventListener {
         override fun onSensorChanged(e: SensorEvent) {
           when (e.sensor.type) {
-            Sensor.TYPE_ROTATION_VECTOR -> {
+            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
               val now = System.currentTimeMillis()
               if (now - lastRot < 33) return
               lastRot = now
               SensorManager.getQuaternionFromVector(q, e.values) // q = w,x,y,z
               sendEvent("onRotation", mapOf("w" to q[0], "x" to q[1], "y" to q[2], "z" to q[3], "acc" to e.accuracy))
             }
-            Sensor.TYPE_LINEAR_ACCELERATION ->
-              sendEvent("onAccel", mapOf("x" to e.values[0], "y" to e.values[1], "z" to e.values[2], "t" to System.currentTimeMillis()))
+            Sensor.TYPE_LINEAR_ACCELERATION, Sensor.TYPE_ACCELEROMETER ->
+              sendEvent("onAccel", mapOf("x" to e.values[0], "y" to e.values[1], "z" to e.values[2],
+                "t" to e.timestamp / 1_000_000.0, "includesGravity" to (e.sensor.type == Sensor.TYPE_ACCELEROMETER)))
           }
         }
         override fun onAccuracyChanged(s: Sensor?, a: Int) {}
       }
-      sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { sm.registerListener(l, it, SensorManager.SENSOR_DELAY_GAME) }
-      sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let { sm.registerListener(l, it, 16_666) }
+      val heading = (sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) ?: sm.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR))?.let {
+        sm.registerListener(l, it, SensorManager.SENSOR_DELAY_GAME)
+      } ?: false
+      val linear = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
+        sm.registerListener(l, it, 16_666)
+      } ?: false
+      val raw = !linear && (sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+        sm.registerListener(l, it, 16_666)
+      } ?: false)
+      sensorStatus = mapOf("acceleration" to if (linear) "linear" else if (raw) "accelerometer" else "none", "heading" to heading)
       sensorListener = l
+      sensorStatus
     }
 
     Function("stopSensors") { stopSensors() }
@@ -240,7 +259,7 @@ class BetaalModule : Module() {
   }
 
   private fun stopAll() {
-    stopSensors(); stopBle()
+    stopSensors(); stopBle(); indoor.stop()
     sessions.values.forEach { it.cancel() }; sessions.clear()
     voices.values.forEach { it.stop() }; voices.clear()
     scope.cancel()

@@ -1,12 +1,12 @@
 // All game sound: spatial events (bell/scream), the possessed player's breathing + whisper,
 // ambient bed during the hunt, feedback and end stings. Native side mixes; JS aims the spatial ones.
 import Betaal, { type SoundKind } from '../modules/betaal';
-import { SELF_SOUND, spatialize, type LatLon } from '../../shared/math.ts';
+import { SELF_SOUND, spatialize, type Position } from '../../shared/math.ts';
 import { FALLEN_DELAY_MS, get, onMessage, serverNow } from './store';
 import { getPrefs } from './prefs';
 
 let nextId = 1;
-const live = new Map<number, { kind: 'bell' | 'scream'; at: LatLon }>();
+const live = new Map<number, { kind: 'bell' | 'scream'; at: Position }>();
 let breathingId: number | null = null;
 let ambientId: number | null = null;
 let whisperTimer: ReturnType<typeof setTimeout> | null = null;
@@ -29,15 +29,15 @@ export function playDemo(kind: SoundKind, pan: number, cutoffHz = 20_000) {
   Betaal.play(nextId++, kind, 1, pan, cutoffHz, false);
 }
 
-function playSpatial(kind: 'bell' | 'scream', at: LatLon | undefined, self: boolean) {
-  const { pos, heading, cfg } = get();
+function playSpatial(kind: 'bell' | 'scream', at: Position | undefined, self: boolean) {
+  const { pos, heading, cfg, sensors } = get();
   if (self) return playPrivate(kind);
   if (!at || !pos) return Betaal.play(nextId++, kind, 0.4, 0, 20_000, false); // no GPS fix: quiet, centred
   const p = spatialize(pos, heading, at, kind, cfg);
   if (p.gain <= 0) return; // out of earshot
   const id = nextId++;
   live.set(id, { kind, at });
-  Betaal.play(id, kind, p.gain, p.pan, p.cutoffHz, false);
+  Betaal.play(id, kind, p.gain, sensors?.heading === false ? 0 : p.pan, sensors?.heading === false ? 20_000 : p.cutoffHz, false);
 }
 
 /** After someone else's scream: the drama sting, timed with the "X has fallen" reveal. */
@@ -85,11 +85,11 @@ export async function initAudio() {
 
   // Re-aim playing sounds as the listener turns / walks (30 Hz).
   setInterval(() => {
-    const { pos, heading, cfg } = get();
+    const { pos, heading, cfg, sensors } = get();
     if (!pos) return;
     for (const [id, s] of live) {
       const p = spatialize(pos, heading, s.at, s.kind, cfg);
-      Betaal.setParams(id, p.gain, p.pan, p.cutoffHz);
+      Betaal.setParams(id, p.gain, sensors?.heading === false ? 0 : p.pan, sensors?.heading === false ? 20_000 : p.cutoffHz);
     }
   }, 33);
 

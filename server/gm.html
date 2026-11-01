@@ -50,7 +50,9 @@
       const cls = [p.id === g.hostId && 'host', !p.alive && 'dead'].filter(Boolean).join(' ');
       const rdy = m.ready.includes(p.id) ? '✓' : '';
       const imm = p.immuneUntil > now ? `<span class="imm">${((p.immuneUntil - now) / 1000).toFixed(0)}s</span>` : '';
-      const pos = p.pos ? `${p.pos.lat.toFixed(6)}, ${p.pos.lon.toFixed(6)} ±${p.pos.acc.toFixed(0)}m` : '—';
+      const pos = !p.pos ? '—' : 'mapId' in p.pos
+        ? `${p.pos.floorId}: (${p.pos.x.toFixed(1)}, ${p.pos.y.toFixed(1)}, ${p.pos.z.toFixed(1)}) ±${p.pos.acc.toFixed(0)}m`
+        : `${p.pos.lat.toFixed(6)}, ${p.pos.lon.toFixed(6)} ±${p.pos.acc.toFixed(0)}m`;
       const n = Object.entries(m.nbrs[p.id] || {}).map(([id, r]) =>
         `${g.players[id]?.name ?? '?'}:${r.uwbD !== undefined ? r.uwbD.toFixed(2) + 'm' : (r.rssiC ?? '').toString().slice(0, 5) + 'dB'}`).join(' ');
       const cal = m.calib[p.id] ? m.calib[p.id].length + ' samples' : '';
@@ -59,7 +61,7 @@
         <td><button onclick="cmd('setRef',{id:'${p.id}'})">${m.ownerId === p.id ? 'HOST/REF ✓' : 'make host'}</button></td></tr>`;
     }).join('');
     document.getElementById('players').innerHTML =
-      '<tr><th>#</th><th>name</th><th>state</th><th>immune</th><th>radio</th><th>offset dB</th><th>calib</th><th>GPS</th><th>neighbours</th><th>host + BLE ref</th></tr>' + rows;
+      '<tr><th>#</th><th>name</th><th>state</th><th>immune</th><th>radio</th><th>offset dB</th><th>calib</th><th>Position</th><th>neighbours</th><th>host + BLE ref</th></tr>' + rows;
   };
   function applyCfg() {
     try { cmd('cfg', { patch: JSON.parse(document.getElementById('cfg').value) }); }

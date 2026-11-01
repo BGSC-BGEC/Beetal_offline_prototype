@@ -7,18 +7,21 @@ import { playDemo, realSounds } from '../audio';
 import { retryBle } from '../radio';
 import { Btn, C, Card, P, Screen, Title } from '../theme';
 import { OnlineBadge, inputStyle } from './common';
+import { IndoorSetup } from './IndoorSetup';
 
 export function Settings({ back }: { back: () => void }) {
   const s = useStore();
   const [name, setName] = useState(getPrefs().name);
   const [server, setServer] = useState(getPrefs().serverUrl);
   const [haptics, setHaptics] = useState(getPrefs().haptics);
+  const [indoor, setIndoor] = useState(false);
   const saveName = () => name.trim() && savePrefs({ name: name.trim() });
   const applyServer = (url: string) => {
     let u = url.trim();
     if (u && !/^wss?:\/\//.test(u)) u = `ws://${u}${/:\d+$/.test(u) ? '' : ':8787'}`; // "192.168.1.5" -> ws://192.168.1.5:8787
     setServer(u); savePrefs({ serverUrl: u, token: null }); connect();
   };
+  if (indoor) return <IndoorSetup back={() => setIndoor(false)} />;
   return (
     <Screen style={{ paddingBottom: 12 }}>
       <Pressable onPress={() => { saveName(); back(); }}><P dim>‹ Back</P></Pressable>
@@ -52,6 +55,11 @@ export function Settings({ back }: { back: () => void }) {
         <Card style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <P>Vibration</P>
           <Switch value={haptics} onValueChange={v => { setHaptics(v); savePrefs({ haptics: v }); }} thumbColor={haptics ? C.gold : C.dim} />
+        </Card>
+
+        <Card>
+          <P dim>Indoor play</P>
+          <Btn title="Custom maps and sensor checks" kind="ghost" onPress={() => setIndoor(true)} />
         </Card>
 
         <Card>

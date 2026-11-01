@@ -3,10 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { Circle, G, Line, Polygon, Text as SvgText } from 'react-native-svg';
 import { useStore } from '../store';
-import { forwardAccel, onStab } from '../radio';
+import { buttonStrike, forwardAccel, onStab } from '../radio';
 import { buzz, playDemo, playPrivate } from '../audio';
 import { wrap180 } from '../../../shared/math.ts';
-import { DEFAULT_CFG } from '../../../shared/config.ts';
 import { Btn, C, Card, P, Screen, Title } from '../theme';
 
 const STEPS = ['Stance', 'Strike', 'Listen', 'Rules'] as const;
@@ -83,18 +82,22 @@ function Stance({ onOk }: { onOk: () => void }) {
           <SvgText x={c} y={c + 30} fill={C.gold} fontSize={18} fontWeight="bold" textAnchor="middle">{cardinal(h)}</SvgText>
         </Svg>
         <P dim style={{ textAlign: 'center', marginTop: 6 }}>
-          {done ? 'Compass works.' : `The gold mark is where you face. 0° = north.\nTurn slowly on the spot, one full circle: ${Math.round(turned)}° / 360°`}
+          {s.sensors?.heading === false ? 'This phone cannot report compass heading. Continue to practise striking.'
+            : done ? 'Compass works.' : `The gold mark is where you face. 0° = north.\nTurn slowly on the spot, one full circle: ${Math.round(turned)}° / 360°`}
         </P>
-        {!s.compassOk && <P style={{ color: C.gold, textAlign: 'center' }}>Compass needs calibrating: wave the phone in a figure-8.</P>}
+        {s.sensors?.heading === false ? <P style={{ color: C.gold, textAlign: 'center' }}>Heading sensor unavailable. The map will stay north-up.</P>
+          : !s.compassOk && <P style={{ color: C.gold, textAlign: 'center' }}>Compass needs calibrating: wave the phone in a figure-8.</P>}
       </View>
-      <Btn title={done ? 'Next' : 'Turn a full circle first'} disabled={!done} onPress={onOk} />
-      {!done && stuck && <Btn title="Compass not responding? Continue anyway" kind="ghost" onPress={onOk} />}
+      <Btn title={done || s.sensors?.heading === false ? 'Next' : 'Turn a full circle first'} disabled={!done && s.sensors?.heading !== false} onPress={onOk} />
+      {!done && s.sensors?.heading !== false && stuck && <Btn title="Compass not responding? Continue anyway" kind="ghost" onPress={onOk} />}
     </View>
   );
 }
 
 // ---------- 2. strike: three detected stabs, live thrust meter ----------
 function Strike({ onOk }: { onOk: () => void }) {
+  const s = useStore();
+  const buttonOnly = s.sensors?.acceleration === 'none';
   const [hits, setHits] = useState(0);
   const [meter, setMeter] = useState(0);
   useEffect(() => {
@@ -102,21 +105,21 @@ function Strike({ onOk }: { onOk: () => void }) {
     const t = setInterval(() => setMeter(m => Math.max(forwardAccel, m * 0.85)), 50);
     return () => { off(); clearInterval(t); };
   }, []);
-  const peak = DEFAULT_CFG.swing.peak;
+  const peak = s.cfg.swing.peak;
   const stuck = useElapsed(30_000);
   const pct = Math.min(1, meter / (peak * 1.5));
   return (
     <View style={{ flex: 1 }}>
       <Title size={34}>Strike</Title>
-      <P>To kill, get within arm's reach of someone and thrust your phone sharply forward at them — a short, fast stab. Waving or walking won't trigger it.</P>
-      <Card style={{ marginTop: 20 }}>
+      <P>{buttonOnly ? 'Motion sensors are unavailable on this phone. Get within striking distance and tap Strike. The same range checks and cooldown apply.' : "To kill, get within arm's reach of someone and thrust your phone sharply forward at them — a short, fast stab. Waving or walking won't trigger it."}</P>
+      {buttonOnly ? <Btn title="Strike" kind="danger" onPress={buttonStrike} /> : <Card style={{ marginTop: 20 }}>
         <P dim>Thrust</P>
         <View style={{ height: 22, backgroundColor: C.bg, borderRadius: 11, overflow: 'hidden', marginTop: 6 }}>
           <View style={{ width: `${pct * 100}%`, height: '100%', backgroundColor: meter >= peak ? C.red : C.gold }} />
           <View style={{ position: 'absolute', left: `${(1 / 1.5) * 100}%`, top: 0, bottom: 0, width: 2, backgroundColor: C.text }} />
         </View>
         <P dim style={{ marginTop: 6 }}>Cross the white line, fast.</P>
-      </Card>
+      </Card>}
       <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16, marginVertical: 26 }}>
         {[0, 1, 2].map(i => (
           <View key={i} style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: i < hits ? C.red : C.line, backgroundColor: i < hits ? '#3a0f0a' : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
@@ -124,9 +127,9 @@ function Strike({ onOk }: { onOk: () => void }) {
           </View>
         ))}
       </View>
-      <P dim style={{ textAlign: 'center' }}>In a game: a 3-second cooldown after every strike. The Ghost must get even closer.</P>
+      <P dim style={{ textAlign: 'center' }}>In a game: a {s.cfg.cooldownMs / 1000}-second cooldown after every strike. The Ghost must get even closer. Point the camera at your target: if several players are within reach, the hit only lands when your aim singles one out.</P>
       <View style={{ flex: 1 }} />
-      <Btn title={hits >= 3 ? 'Next' : `Land ${3 - hits} more stab${3 - hits === 1 ? '' : 's'}`} disabled={hits < 3} onPress={onOk} />
+      <Btn title={hits >= 3 ? 'Next' : `Practise ${3 - hits} more strike${3 - hits === 1 ? '' : 's'}`} disabled={hits < 3} onPress={onOk} />
       {hits < 3 && stuck && <Btn title="Can't trigger it? Continue anyway" kind="ghost" onPress={onOk} />}
     </View>
   );
@@ -176,9 +179,9 @@ const CARDS: { title: string; body: string }[] = [
   { title: 'One of you carries Betaal', body: 'The Ghost possesses one player at a time. Nobody can see who — not on the map, not on the screen. Every phone looks the same.' },
   { title: 'Listen for it', body: 'A bell rings where the Ghost enters someone. A scream rings where someone dies. From afar, both come from their direction in your earphones — turn to find them. Huddled close, every sound is everywhere: to know who carries Betaal, you must be away from the crowd when it rings.' },
   { title: 'Kill, or be killed', body: 'If you hear breathing, Betaal is in you. Kill anyone before your time runs out and it moves on. Do nothing, and it kills you instead.' },
-  { title: 'Every death moves the Ghost', body: 'After any death the Ghost jumps to a random living player. Kill the one carrying it and the Ghost is destroyed — every survivor wins.' },
+  { title: 'Every death moves the Ghost', body: 'After a death, unless the game ends, the Ghost jumps to a different eligible living player. Kill the one carrying it and the Ghost is destroyed — every survivor wins.' },
   { title: 'Or the Ghost wins', body: 'If it comes down to two players, whoever carries Betaal at that moment takes everything. Choose your trust carefully.' },
-  { title: 'The map flashes', body: 'Each time the Ghost moves, everyone’s position appears for 5 seconds. A pale wisp marks the one it just left. A blue ring means protected for 10 seconds.' },
+  { title: 'The map flashes', body: 'At the start and each time the Ghost moves, everyone’s position appears for 5 seconds. A pale wisp marks the one it just left. A blue ring blocks possession for 10 seconds; it does not block kills.' },
   { title: 'Play fair', body: 'Stay inside the agreed ground. Keep the phone in your hand, upright. If you die, leave quietly and give no hints.' },
 ];
 

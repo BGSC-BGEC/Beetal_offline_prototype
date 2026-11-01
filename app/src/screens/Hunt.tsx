@@ -3,30 +3,39 @@ import { Alert, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'r
 import { amAlive, leaveRoom, myPlayer, serverNow, useStore } from '../store';
 import { Radar } from '../Radar';
 import { SkullIcon as Skull } from '../icons';
-import { C, P, Title } from '../theme';
+import { buttonStrike } from '../radio';
+import { Btn, C, P, Title } from '../theme';
+import { IndoorSetup } from './IndoorSetup';
+import { isIndoor } from '../../../shared/math.ts';
 
 export function Hunt({ now }: { now: number }) {
   const s = useStore();
   const { width } = useWindowDimensions();
   const [peek, setPeek] = useState(false);
+  const [indoor, setIndoor] = useState(false);
   const alive = amAlive();
   const me = myPlayer();
   const living = s.players.filter(p => p.alive).length;
   const gpsBad = !s.pos || s.pos.acc > 15;
+  const indoorPos = s.pos && isIndoor(s.pos) ? s.pos : null;
+  if (indoor && alive) return <IndoorSetup back={() => setIndoor(false)} />;
 
   return (
     // Every phone shows the same screen; possession lives only in your ears. Hold to check yourself.
     <Pressable style={st.root} onLongPress={() => setPeek(true)} onPressOut={() => setPeek(false)} delayLongPress={350}>
       <View style={st.top}>
         <Chip text={`${living} alive`} />
-        {me?.immune && <Chip text="PROTECTED" color={C.blue} />}
-        <Chip text={s.pos ? `GPS ±${s.pos.acc.toFixed(0)} m` : 'No GPS'} color={gpsBad ? C.red : C.dim} />
+        {me?.immune && <Chip text="POSSESSION IMMUNITY" color={C.blue} />}
+        <Chip text={s.pos ? `${isIndoor(s.pos) ? 'Indoor' : 'GPS'} ±${s.pos.acc.toFixed(0)} m` : s.arena ? 'No indoor fix' : 'No GPS'} color={gpsBad ? C.red : C.dim} />
       </View>
-      {!s.compassOk && <P dim style={{ textAlign: 'center', color: C.gold }}>Wave your phone in a figure-8 to fix the compass</P>}
+      {s.sensors?.heading && !s.compassOk && <P dim style={{ textAlign: 'center', color: C.gold }}>Wave your phone in a figure-8 to fix the compass</P>}
+      {s.arena && <Pressable onPress={() => setIndoor(true)}><P dim style={{ textAlign: 'center', color: C.gold }}>
+        {indoorPos ? s.arena.floors.find(f => f.id === indoorPos.floorId)?.name : 'Set your indoor location'} · Map / update my spot{s.suggestedFloor ? ' · floor change detected — tap to confirm' : ''}
+      </P></Pressable>}
 
       <View style={{ flex: 1, justifyContent: 'center' }}>
         {s.pos ? <Radar s={s} size={width} now={now} immune={!!me?.immune} />
-          : <P style={{ textAlign: 'center' }}>Waiting for GPS — stay outdoors, away from buildings…</P>}
+          : <P style={{ textAlign: 'center' }}>{s.arena ? 'Open Map / update my spot and tap where you are standing.' : 'Waiting for GPS — stay outdoors, away from buildings…'}</P>}
       </View>
 
       {s.fallen && now >= s.fallen.from && now < s.fallen.until && alive && (
@@ -39,7 +48,8 @@ export function Hunt({ now }: { now: number }) {
       )}
 
       <View style={st.bottom}>
-        <P dim style={{ textAlign: 'center' }}>Hold the screen to check yourself · thrust to strike</P>
+        <P dim style={{ textAlign: 'center' }}>Hold the screen to check yourself · {s.sensors?.acceleration === 'none' ? 'tap Strike to attack' : 'thrust to strike'}</P>
+        {alive && s.sensors?.acceleration === 'none' && <Btn title="Strike" kind="danger" onPress={buttonStrike} style={{ marginHorizontal: 20 }} />}
         <Pressable onPress={() => Alert.alert('Leave the game?', 'You will die and cannot rejoin this round.', [
           { text: 'Stay', style: 'cancel' }, { text: 'Leave', style: 'destructive', onPress: leaveRoom }])}>
           <P dim style={{ textAlign: 'center', marginTop: 8, fontSize: 12 }}>leave</P>
@@ -59,7 +69,7 @@ export function Hunt({ now }: { now: number }) {
           ) : (
             <>
               <Title size={30}>You are yourself</Title>
-              <P style={{ textAlign: 'center' }}>{me?.immune ? 'Protected for a few seconds.' : 'For now.'}</P>
+              <P style={{ textAlign: 'center' }}>{me?.immune ? 'Protected from possession for a few seconds. You can still be killed.' : 'For now.'}</P>
             </>
           )}
         </View>
@@ -85,7 +95,7 @@ function Chip({ text, color = C.dim }: { text: string; color?: string }) {
 
 const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg, paddingTop: 48 },
-  top: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
+  top: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginBottom: 6 },
   bottom: { paddingBottom: 22, paddingHorizontal: 20 },
   banner: { position: 'absolute', bottom: 120, alignSelf: 'center', alignItems: 'center', backgroundColor: '#0b0a0ce6', borderColor: '#d4442e66', borderWidth: 1, paddingHorizontal: 28, paddingVertical: 14, borderRadius: 16 },
   peek: { ...StyleSheet.absoluteFill, backgroundColor: '#0b0a0cf2', alignItems: 'center', justifyContent: 'center', padding: 28 },

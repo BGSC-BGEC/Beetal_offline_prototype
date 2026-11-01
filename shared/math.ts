@@ -1,7 +1,14 @@
 // Pure math shared by the app (audio, swing, targeting) and the server (validation).
 import type { Cfg, Role } from './config.ts';
+import type { IndoorPosition } from './indoor.ts';
+import type { Measurement } from './protocol.ts';
 
 export type LatLon = { lat: number; lon: number; acc: number };
+export type Position = LatLon | IndoorPosition;
+export const isIndoor = (p: Position): p is IndoorPosition => 'mapId' in p;
+export function sameSpace(a: Position, b: Position) {
+  return isIndoor(a) ? isIndoor(b) && a.mapId === b.mapId : !isIndoor(b);
+}
 
 const M_PER_DEG = 111_320;
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -15,10 +22,15 @@ export function wrap180(a: number): number {
 }
 
 /** Local east/north offset of `to` from `from` (equirectangular; fine under ~1 km). */
-export function enu(from: LatLon, to: LatLon) {
-  const dN = (to.lat - from.lat) * M_PER_DEG;
-  const dE = (to.lon - from.lon) * M_PER_DEG * Math.cos(rad(from.lat));
-  return { dE, dN, d: Math.hypot(dE, dN), bearing: (deg(Math.atan2(dE, dN)) + 360) % 360 };
+export function enu(from: Position, to: Position) {
+  if (!sameSpace(from, to)) return { dE: Infinity, dN: Infinity, dZ: Infinity, d: Infinity, bearing: 0 };
+  let dE: number, dN: number, dZ = 0;
+  if (isIndoor(from) && isIndoor(to)) { dE = to.x - from.x; dN = to.y - from.y; dZ = to.z - from.z; }
+  else if (!isIndoor(from) && !isIndoor(to)) {
+    dN = (to.lat - from.lat) * M_PER_DEG;
+    dE = (to.lon - from.lon) * M_PER_DEG * Math.cos(rad(from.lat));
+  } else return { dE: Infinity, dN: Infinity, dZ: Infinity, d: Infinity, bearing: 0 };
+  return { dE, dN, dZ, d: Math.hypot(dE, dN, dZ), bearing: (deg(Math.atan2(dE, dN)) + 360) % 360 };
 }
 
 /**
@@ -50,7 +62,7 @@ export type SpatialParams = { gain: number; pan: number; cutoffHz: number };
  * kind picks the hearing radii. Recompute every frame while the sound plays.
  */
 export function spatialize(
-  listener: LatLon, headingDeg: number, src: LatLon,
+  listener: Position, headingDeg: number, src: Position,
   kind: 'bell' | 'scream', cfg: Cfg,
 ): SpatialParams {
   const { refM, hearM, maxM } = cfg.audio[kind];
@@ -71,8 +83,9 @@ export function spatialize(
 }
 
 /** Move a point a random distance (uniform over a disc of radius m). */
-export function blur(p: LatLon, m: number, rng: () => number): LatLon {
+export function blur(p: Position, m: number, rng: () => number): Position {
   const r = m * Math.sqrt(rng()), a = 2 * Math.PI * rng();
+  if (isIndoor(p)) return { ...p, x: p.x + r * Math.cos(a), y: p.y + r * Math.sin(a) };
   return {
     ...p,
     lat: p.lat + (r * Math.cos(a)) / M_PER_DEG,
@@ -111,6 +124,28 @@ export function bleOffsets(C: Record<string, number>): Record<string, number> {
 
 export type Accel = { x: number; y: number; z: number; t: number }; // linear accel, gravity removed
 
+/** Estimate gravity from raw accelerometer samples; allow one second to settle before strikes. */
+export function makeGravityFilter() {
+  let gravity: Accel | null = null;
+  let startedAt = 0;
+  return (a: Accel): Accel | null => {
+    if (!gravity || a.t <= gravity.t || a.t - gravity.t > 1000) {
+      gravity = { ...a };
+      startedAt = a.t;
+      return null;
+    }
+    // shortcut: slow gravity estimate assumes a steady grip; use sensor fusion if rotation causes false strikes on real phones.
+    const alpha = Math.exp(-(a.t - gravity.t) / 800);
+    gravity = {
+      x: alpha * gravity.x + (1 - alpha) * a.x,
+      y: alpha * gravity.y + (1 - alpha) * a.y,
+      z: alpha * gravity.z + (1 - alpha) * a.z,
+      t: a.t,
+    };
+    return a.t - startedAt < 1000 ? null : { x: a.x - gravity.x, y: a.y - gravity.y, z: a.z - gravity.z, t: a.t };
+  };
+}
+
 /**
  * Stateful stab detector. Feed every sample; returns true once per stab.
  * Stab = forward thrust along the phone's back axis (-z) peaking >= peak
@@ -119,12 +154,12 @@ export type Accel = { x: number; y: number; z: number; t: number }; // linear ac
 export function makeSwingDetector(cfg: Cfg) {
   let riseT = -Infinity;
   let armed = true;
-  return (a: Accel): boolean => {
+  return (a: Accel, settings = cfg.swing): boolean => {
     const f = -a.z;
     const s = Math.hypot(a.x, a.y);
     if (f < 3) { riseT = -Infinity; armed = true; return false; }
     if (riseT === -Infinity) riseT = a.t;
-    if (armed && f >= cfg.swing.peak && f >= cfg.swing.dominance * s && a.t - riseT <= cfg.swing.windowMs) {
+    if (armed && f >= settings.peak && f >= settings.dominance * s && a.t - riseT <= settings.windowMs) {
       armed = false; // one trigger per thrust; re-arms when f drops back below 3
       return true;
     }
@@ -141,36 +176,54 @@ export type PeerReading = {
   uwb?: { d: number; az?: number; t: number };
 };
 
-export type Target = { id: string; method: 'uwb' | 'ble'; d: number; az?: number; rssiC?: number };
-export type Miss = { miss: 'none' | 'crowded' };
+export type Strike = { targetId: string; m: Measurement };
+export type Miss = { miss: 'none' };
 
+/**
+ * UWB with angle: nearest peer inside range and cone. Otherwise every peer whose BLE (or angle-less UWB)
+ * reading puts it inside range goes in `near`; the server resolves the target with positions + heading.
+ */
 export function selectTarget(
-  peers: PeerReading[], role: Role, myOffset: number, myUwb: boolean, now: number, cfg: Cfg,
-): Target | Miss {
-  const uwb: Target[] = [];
-  const ble: Target[] = [];
+  peers: PeerReading[], role: Role, myOffset: number, myUwb: boolean, now: number, cfg: Cfg, heading?: number,
+): Strike | Miss {
+  const uwb: { id: string; d: number; az: number }[] = [];
+  const near: Record<string, number> = {};
   for (const p of peers) {
-    if (myUwb && p.uwb && now - p.uwb.t <= cfg.uwb.freshMs) {
-      const okAngle = p.uwb.az === undefined || Math.abs(p.uwb.az) <= cfg.uwb.coneDeg;
-      if (p.uwb.d <= cfg.uwb.killR[role] && okAngle) uwb.push({ id: p.id, method: 'uwb', d: p.uwb.d, az: p.uwb.az });
-    } else if (p.rssi !== undefined) {
-      const rssiC = p.rssi - myOffset - p.offset;
-      ble.push({ id: p.id, method: 'ble', d: bleDistance(rssiC, cfg), rssiC });
+    const u = myUwb && p.uwb && now - p.uwb.t <= cfg.uwb.freshMs && Number.isFinite(p.uwb.d) && p.uwb.d >= 0 ? p.uwb : null;
+    if (u && u.az !== undefined && Number.isFinite(u.az)) {
+      if (u.d <= cfg.uwb.killR[role] && Math.abs(u.az) <= cfg.uwb.coneDeg) uwb.push({ id: p.id, d: u.d, az: u.az });
+      continue;
     }
+    if (p.rssi === undefined) continue;
+    const rssiC = p.rssi - myOffset - p.offset;
+    if (bleDistance(rssiC, cfg) <= cfg.ble.killR[role]) near[p.id] = rssiC;
   }
-  if (uwb.length) return uwb.sort((a, b) => a.d - b.d)[0];
+  if (uwb.length) {
+    const t = uwb.sort((a, b) => a.d - b.d)[0];
+    return { targetId: t.id, m: { method: 'uwb', d: t.d, az: t.az } };
+  }
+  const ids = Object.keys(near).sort((a, b) => near[b] - near[a]);
+  if (!ids.length) return { miss: 'none' };
+  return { targetId: ids[0], m: { method: 'ble', near, ...(heading !== undefined && Number.isFinite(heading) ? { heading } : {}) } };
+}
 
-  ble.sort((a, b) => b.rssiC! - a.rssiC!);
-  const best = ble[0];
-  if (!best || best.d > cfg.ble.killR[role]) return { miss: 'none' };
-  if (ble[1] && best.rssiC! - ble[1].rssiC! < cfg.ble.ambiguityDb) return { miss: 'crowded' };
-  return best;
+/**
+ * Is `to` inside the cone the attacker at `from` faces? Uses shared positions, so it only answers when
+ * their combined error is smaller than their separation; otherwise 'unknown'. Other indoor floors are 'out'.
+ */
+export function coneCheck(from: Position, to: Position, headingDeg: number, coneDeg: number): 'in' | 'out' | 'unknown' {
+  if (isIndoor(from) && isIndoor(to) && from.mapId === to.mapId && from.floorId !== to.floorId) return 'out';
+  const { dE, dN, bearing } = enu(from, to);
+  const sep = Math.hypot(dE, dN), err = from.acc + to.acc;
+  if (!Number.isFinite(sep) || err >= sep) return 'unknown';
+  const off = Math.abs(wrap180(bearing - headingDeg)), slack = deg(Math.asin(err / sep));
+  return off + slack <= coneDeg ? 'in' : off - slack > coneDeg ? 'out' : 'unknown';
 }
 
 // ---------- radar (heading-up map) ----------
 
 /** Point `p` relative to `me`, rotated so the direction the phone faces is +y (up). Metres. */
-export function toRadar(me: LatLon, headingDeg: number, p: LatLon): { x: number; y: number } {
+export function toRadar(me: Position, headingDeg: number, p: Position): { x: number; y: number } {
   const { dE, dN } = enu(me, p);
   const h = rad(headingDeg);
   return { x: dE * Math.cos(h) - dN * Math.sin(h), y: dE * Math.sin(h) + dN * Math.cos(h) };

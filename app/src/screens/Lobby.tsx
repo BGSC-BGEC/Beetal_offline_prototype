@@ -4,23 +4,26 @@ import { amOwner, host, leaveRoom, myPlayer, nameOf, setReady, useStore } from '
 import { calibrate } from '../radio';
 import { Btn, C, Card, P, Screen, Title } from '../theme';
 import { Avatar } from './common';
+import { IndoorSetup } from './IndoorSetup';
 
 const TIMERS = [60, 90, 120, 180, 240, 300];
 
 export function Lobby() {
   const s = useStore();
+  const [indoor, setIndoor] = useState(false);
   const owner = amOwner();
   const me = myPlayer();
   const calibrating = s.phase === 'CALIBRATION';
   const n = s.players.length;
   const allReady = n > 0 && s.players.every(p => p.ready);
-  const startBlock = n < 3 ? `Need ${3 - n} more player${3 - n > 1 ? 's' : ''}` : !allReady ? 'Waiting for everyone to be ready' : null;
+  const startBlock = n < 3 ? `Need ${3 - n} more player${3 - n > 1 ? 's' : ''}` : s.arena && s.players.some(p => !p.positionReady) ? 'Everyone must set their spot on the indoor map' : !allReady ? 'Waiting for everyone to be ready' : null;
 
   const confirmLeave = () =>
     Alert.alert('Leave this game?', owner ? 'Host controls will pass to another player.' : undefined, [
       { text: 'Stay', style: 'cancel' }, { text: 'Leave', style: 'destructive', onPress: leaveRoom },
     ]);
 
+  if (indoor) return <IndoorSetup back={() => setIndoor(false)} />;
   return (
     <Screen style={{ paddingBottom: 16 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -35,6 +38,8 @@ export function Lobby() {
       </Pressable>
 
       <ScrollView style={{ flex: 1, marginTop: 14 }} contentContainerStyle={{ gap: 8 }}>
+        <Btn title={s.arena ? `${s.arena.name} · map and my location` : 'Indoor map / sensor setup'} kind="ghost" onPress={() => setIndoor(true)} />
+        {s.arena && <P dim>Indoor map active. Each player taps their spot on the map before play. {s.indoorNote}</P>}
         {s.players.map(p => (
           <Card key={p.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 }}>
             <Avatar name={p.name} color={p.connected ? C.gold : C.dim} />
@@ -43,7 +48,7 @@ export function Lobby() {
                 {p.name}{p.id === s.me?.id ? '  (you)' : ''}
               </Text>
               <Text style={{ color: C.dim, fontSize: 12 }}>
-                {p.id === s.ownerId ? 'Host · ' : ''}{p.uwb ? 'UWB' : 'Bluetooth'}{!p.connected ? ' · reconnecting…' : ''}
+                {p.id === s.ownerId ? 'Host · ' : ''}{p.uwb ? 'UWB' : 'Bluetooth'}{!p.connected ? ' · reconnecting…' : ''}{s.arena && !p.positionReady ? ' · location needed' : ''}
               </Text>
             </View>
             {calibrating

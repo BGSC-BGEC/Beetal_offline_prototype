@@ -1,22 +1,29 @@
 // App state + server connection. One module-level store, read with useStore().
 import { useSyncExternalStore } from 'react';
 import { DEFAULT_CFG, type Cfg } from '../../shared/config.ts';
-import type { LatLon } from '../../shared/math.ts';
-import type { ClientMsg, HistoryEntry, HostCmd, PublicPlayer, Result, ServerMsg, Snapshot } from '../../shared/protocol.ts';
+import type { Position } from '../../shared/math.ts';
+import type { ClientMsg, HistoryEntry, HostCmd, MapCmd, PublicPlayer, Result, ServerMsg, Snapshot } from '../../shared/protocol.ts';
+import type { IndoorMap, WifiReading } from '../../shared/indoor.ts';
 import { getPrefs, savePrefs } from './prefs';
+import type { IndoorCapabilities, SensorStatus } from '../modules/betaal';
 
 export type State = {
   online: boolean;                // socket open
+  serverCompatible: boolean;
   me: { id: string; idx: number } | null; // in a room
   code: string | null; room: number; cfg: Cfg;
   phase: string; players: PublicPlayer[]; ownerId: string | null;
   countdownEndsAt: number | null; possessionSec: number;
   possessed: { endsAt: number } | null;
   ping: { snapshot: Snapshot; until: number } | null;
-  deaths: LatLon[];
+  deaths: Position[];
   fallen: { name: string; left: number; from: number; until: number } | null; // "X has fallen" reveal
   result: Result | null; history: HistoryEntry[];
-  pos: LatLon | null; heading: number; compassOk: boolean;
+  pos: Position | null; heading: number; compassOk: boolean;
+  sensors: SensorStatus | null;
+  arena: IndoorMap | null;
+  indoorCapabilities: IndoorCapabilities | null; wifi: WifiReading[];
+  indoorNote: string; suggestedFloor: string | null;
   toast: { text: string; until: number } | null;
   busy: boolean;                  // waiting on create/join
 };
@@ -26,10 +33,11 @@ export const FALLEN_DELAY_MS = 2500; // scream's loud body is ~2.8 s once leadin
 export const FALLEN_SHOW_MS = 5500;
 
 const initial: State = {
-  online: false, me: null, code: null, room: 0, cfg: DEFAULT_CFG,
+  online: false, serverCompatible: false, me: null, code: null, room: 0, cfg: DEFAULT_CFG,
   phase: 'LOBBY', players: [], ownerId: null, countdownEndsAt: null, possessionSec: 120,
   possessed: null, ping: null, deaths: [], fallen: null, result: null, history: [],
-  pos: null, heading: 0, compassOk: true, toast: null, busy: false,
+  pos: null, heading: 0, compassOk: true, sensors: null, arena: null, toast: null, busy: false,
+  indoorCapabilities: null, wifi: [], indoorNote: 'Indoor positioning has not been configured.', suggestedFloor: null,
 };
 let state = initial;
 const subs = new Set<() => void>();
@@ -92,15 +100,15 @@ setInterval(() => send({ t: 'sync', c: Date.now() }), 10_000);
 
 export function createRoom() { set({ busy: true }); send({ t: 'create', name: getPrefs().name, uwb: uwbCapable }); }
 export function joinRoom(code: string) { set({ busy: true }); send({ t: 'join', code, name: getPrefs().name, uwb: uwbCapable }); }
-export function setReady(on: boolean) { send({ t: 'ready', on }); }
-export function host(cmd: HostCmd) { send({ t: 'host', ...cmd } as ClientMsg); }
+export function setReady(on: boolean) { if (!state.serverCompatible) return toast('Update the game server before playing this build.'); send({ t: 'ready', on }); }
+export function host(cmd: HostCmd | MapCmd) { if (!state.serverCompatible) return toast('Update the game server before using this build.'); send({ t: 'host', ...cmd } as ClientMsg); }
 export function leaveRoom() { send({ t: 'leave' }); clearRoom(); }
 
 function clearRoom() {
   savePrefs({ token: null });
   set({
     me: null, code: null, players: [], ownerId: null, possessed: null, ping: null, deaths: [], result: null,
-    history: [], phase: 'LOBBY', countdownEndsAt: null, fallen: null,
+    history: [], phase: 'LOBBY', countdownEndsAt: null, fallen: null, arena: null, pos: null,
   });
 }
 
@@ -109,7 +117,7 @@ function reduce(m: ServerMsg) {
     case 'welcome':
       autoRejoin = false;
       savePrefs({ token: m.token });
-      set({ me: { id: m.id, idx: m.idx }, code: m.code, cfg: m.cfg, room: m.room, busy: false });
+      set({ me: { id: m.id, idx: m.idx }, code: m.code, cfg: m.cfg, room: m.room, arena: m.arena ?? null, busy: false, serverCompatible: m.protocolVersion === 2 });
       break;
     case 'error':
       set({ busy: false });
@@ -135,6 +143,7 @@ function reduce(m: ServerMsg) {
       break;
     }
     case 'cfg': set({ cfg: m.cfg }); break;
+    case 'map': set({ arena: m.arena, pos: null, deaths: [], ping: null }); break;
     case 'possessed': set({ possessed: { endsAt: m.endsAt } }); break;
     case 'released': set({ possessed: null }); break;
     case 'ping': set({ ping: { snapshot: m.snapshot, until: m.until } }); break;

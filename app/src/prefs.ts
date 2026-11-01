@@ -1,5 +1,6 @@
 // Persisted player preferences (survive app restarts).
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { IndoorMap } from '../../shared/indoor.ts';
 
 export type Prefs = {
   name: string;
@@ -7,13 +8,15 @@ export type Prefs = {
   token: string | null;   // reconnect token for the room you're in
   tutorialDone: boolean;
   haptics: boolean;
+  indoorMap: IndoorMap | null;
+  strideM: number;
 };
 
 // Render free web service (render.yaml); LAN servers are set in Settings.
 export const DEFAULT_SERVER = 'wss://betaal-proto.onrender.com';
 
 const KEY = 'betaal.prefs.v1';
-let prefs: Prefs = { name: '', serverUrl: DEFAULT_SERVER, token: null, tutorialDone: false, haptics: true };
+let prefs: Prefs = { name: '', serverUrl: DEFAULT_SERVER, token: null, tutorialDone: false, haptics: true, indoorMap: null, strideM: 0.7 };
 
 export async function loadPrefs(): Promise<Prefs> {
   try {
