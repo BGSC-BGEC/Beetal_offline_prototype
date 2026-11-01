@@ -1,0 +1,19 @@
+{
+  "name": "betaal-physical-proto",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "node server/server.ts",
+    "test": "node --test shared/math.test.ts server/rules.test.ts server/server.test.ts",
+    "bots": "node server/bots.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
+  }
+}

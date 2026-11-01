@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Betaal — Game Master</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 16px; background: #111; color: #ddd; }
+  button { margin: 2px; padding: 6px 10px; }
+  table { border-collapse: collapse; margin-top: 10px; }
+  td, th { border: 1px solid #333; padding: 4px 8px; text-align: left; }
+  .host { background: #5a1a1a; } .dead { opacity: .4; } .imm { color: #6cf; }
+  textarea { width: 100%; height: 220px; background: #000; color: #9f9; font: 12px monospace; }
+</style>
+<h2>Betaal — Game Master <small id="phase"></small></h2>
+<div>Rooms: <span id="rooms">none</span></div>
+<div>
+  <button onclick="cmd('start')">Start (skips ready)</button>
+  <button onclick="cmd('task')">Complete task set</button>
+  <button onclick="cmd('calibStart')">Calibration start</button>
+  <button onclick="cmd('calibFinish')">Calibration finish</button>
+  <button onclick="if(confirm('Reset game?'))cmd('reset')">Reset</button>
+  <span id="timer"></span>
+</div>
+<div id="result"></div>
+<table id="players"></table>
+<h3>Config (edit, then Apply)</h3>
+<textarea id="cfg"></textarea><br>
+<button onclick="applyCfg()">Apply config</button>
+<script>
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
+  let watching = null;
+  const cmd = (c, extra = {}) => ws.send(JSON.stringify({ t: 'gm', cmd: c, ...extra }));
+  const watch = code => { watching = code; cfgLoaded = false; ws.send(JSON.stringify({ t: 'gm', cmd: 'watch', code })); };
+  let cfgLoaded = false;
+  ws.onopen = () => watch(null);
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.t === 'rooms') {
+      document.getElementById('rooms').innerHTML = m.list.map(r =>
+        `<button onclick="watch('${r.code}')">${r.code === watching ? '▶ ' : ''}${r.code} · ${r.players}p · ${r.phase}</button>`).join(' ') || 'none';
+      if (!watching && m.list.length === 1) watch(m.list[0].code);
+      return;
+    }
+    if (m.t !== 'gmState') return;
+    const g = m.game, now = m.now;
+    document.getElementById('phase').textContent = `${m.code} — ${g.phase}`;
+    document.getElementById('timer').textContent =
+      g.phase === 'HUNT' && g.hostId ? `host timer: ${Math.max(0, (g.timerEndsAt - now) / 1000).toFixed(0)} s` : '';
+    document.getElementById('result').textContent = g.result ? `RESULT: ${g.result.kind} — winners: ${g.result.winners.map(id => g.players[id]?.name).join(', ')}` : '';
+    if (!cfgLoaded) { document.getElementById('cfg').value = JSON.stringify(g.cfg, null, 2); cfgLoaded = true; }
+    const rows = Object.values(g.players).map(p => {
+      const cls = [p.id === g.hostId && 'host', !p.alive && 'dead'].filter(Boolean).join(' ');
+      const rdy = m.ready.includes(p.id) ? '✓' : '';
+      const imm = p.immuneUntil > now ? `<span class="imm">${((p.immuneUntil - now) / 1000).toFixed(0)}s</span>` : '';
+      const pos = p.pos ? `${p.pos.lat.toFixed(6)}, ${p.pos.lon.toFixed(6)} ±${p.pos.acc.toFixed(0)}m` : '—';
+      const n = Object.entries(m.nbrs[p.id] || {}).map(([id, r]) =>
+        `${g.players[id]?.name ?? '?'}:${r.uwbD !== undefined ? r.uwbD.toFixed(2) + 'm' : (r.rssiC ?? '').toString().slice(0, 5) + 'dB'}`).join(' ');
+      const cal = m.calib[p.id] ? m.calib[p.id].length + ' samples' : '';
+      return `<tr class="${cls}"><td>${p.idx}</td><td>${p.name}${p.id === g.hostId ? ' 👻' : ''}</td><td>${p.alive ? 'alive' : 'dead'} ${rdy}</td>
+        <td>${imm}</td><td>${p.uwb ? 'UWB' : 'BLE'}</td><td>${p.bleOffset.toFixed(1)}</td><td>${cal}</td><td>${pos}</td><td>${n}</td>
+        <td><button onclick="cmd('setRef',{id:'${p.id}'})">${m.ownerId === p.id ? 'HOST/REF ✓' : 'make host'}</button></td></tr>`;
+    }).join('');
+    document.getElementById('players').innerHTML =
+      '<tr><th>#</th><th>name</th><th>state</th><th>immune</th><th>radio</th><th>offset dB</th><th>calib</th><th>GPS</th><th>neighbours</th><th>host + BLE ref</th></tr>' + rows;
+  };
+  function applyCfg() {
+    try { cmd('cfg', { patch: JSON.parse(document.getElementById('cfg').value) }); }
+    catch (e) { alert('Bad JSON: ' + e.message); }
+  }
+</script>

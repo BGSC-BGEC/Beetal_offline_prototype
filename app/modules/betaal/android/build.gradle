@@ -1,0 +1,29 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.betaal'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.betaal"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+  // Game audio lives in app/assets/audio/<kind>.<ext>; packaged as Android assets.
+  sourceSets {
+    main {
+      assets.srcDirs += ["${projectDir}/../../../assets/audio"]
+    }
+  }
+}
+
+dependencies {
+  implementation 'androidx.core.uwb:uwb:1.0.0'
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+}

@@ -1,0 +1,4 @@
+app
+builds
+node_modules
+**/*.test.ts

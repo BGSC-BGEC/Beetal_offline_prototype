@@ -1,0 +1,11 @@
+# Render blueprint: free web service, no credit card. Render dashboard -> New -> Blueprint -> pick this repo.
+# Free services sleep after 15 min with no HTTP request or WebSocket message; the first connection
+# after that takes ~1 min to wake it. Rooms live in memory, so a restart ends any running game.
+services:
+  - type: web
+    name: betaal-proto
+    runtime: docker
+    plan: free
+    region: singapore # closest Render region to India
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
